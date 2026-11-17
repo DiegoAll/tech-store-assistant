@@ -1,0 +1,54 @@
+package service
+
+import (
+	"context"
+
+	"poc-rag-mcp/backend/internal/domain"
+
+	"github.com/sashabaranov/go-openai"
+)
+
+type ChatService interface {
+	ProcessMessage(ctx context.Context, message string) (string, error)
+}
+
+type chatService struct {
+	aiClient  *openai.Client
+	orderRepo domain.OrderRepository
+	dbConn    interface{} // Placeholder para tu pgxpool o DB para el RAG
+}
+
+func NewChatService(ai *openai.Client, orderRepo domain.OrderRepository) ChatService {
+	return &chatService{
+		aiClient:  ai,
+		orderRepo: orderRepo,
+	}
+}
+
+func (s *chatService) ProcessMessage(ctx context.Context, message string) (string, error) {
+	// 1. Lógica RAG (Simulada por ahora para no romper tu código)
+	// 2. Lógica de Agente / Tool Calling
+	// Aquí es donde más adelante conectarás con el Cliente MCP.
+
+	// Por ahora, hacemos una llamada simple a OpenAI para mantener la funcionalidad
+	systemPrompt := `Eres un asistente virtual amable para una tienda de tecnología. Responde de forma concisa.`
+
+	messages := []openai.ChatCompletionMessage{
+		{Role: openai.ChatMessageRoleSystem, Content: systemPrompt},
+		{Role: openai.ChatMessageRoleUser, Content: message},
+	}
+
+	// Aquí podrías añadir la lógica para detectar si el usuario pregunta por un pedido
+	// y llamar a s.orderRepo.GetOrderByID
+
+	resp, err := s.aiClient.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model:     "gpt-4o-mini",
+		Messages:  messages,
+		MaxTokens: 300,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return resp.Choices[0].Message.Content, nil
+}
