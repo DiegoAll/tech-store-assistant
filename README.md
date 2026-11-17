@@ -1,58 +1,39 @@
-# commerce-rag-mcp · TechStore Assistant
+# TechStore Assistant
 
-> Tienda de tecnología y domótica con un **agente conversacional** que consulta datos reales mediante **MCP (Model Context Protocol)**.
-> Proyecto de aprendizaje: cómo construir, conectar y asegurar un agente de IA dentro de una aplicación web.
+Plataforma de comercio electrónico de tecnología y domótica con un **asistente conversacional basado en agentes de IA**. El asistente interpreta la intención del cliente y consulta datos reales de la tienda (pedidos, inventario, catálogo, soporte) a través de herramientas expuestas mediante **MCP (Model Context Protocol)**.
 
----
+## Visión general
 
-## ¿Qué problema resuelve?
+Los clientes esperan respuestas inmediatas sobre sus compras y los productos. Un asistente basado únicamente en un modelo de lenguaje genera respuestas sin respaldo, y uno basado solo en documentos no conoce el estado real del negocio. TechStore Assistant resuelve esto separando responsabilidades:
 
-Un cliente de una tienda online quiere respuestas inmediatas, no esperar en un menú de atención:
+- El **modelo de lenguaje** entiende la solicitud y decide qué herramienta necesita.
+- El **servidor MCP** expone esas herramientas como un contrato estándar y desacoplado.
+- La **base de datos** es la única fuente de verdad para pedidos, stock y catálogo.
 
-- "¿Dónde va mi pedido 1234?"
-- "¿Tienen la SecureCam Pro en bodega?"
-- "Mi cámara no conecta al WiFi, ¿pueden ayudarme?"
-- "¿Cuál es la política de devoluciones?"
+Casos de uso cubiertos:
 
-Un chatbot basado solo en un LLM **inventa** respuestas. Un chatbot basado solo en documentos **no conoce el stock ni los pedidos reales**. Este proyecto combina ambos mundos: el LLM entiende la intención y **decide qué herramienta usar**; las herramientas consultan la base de datos real.
-
-## ¿Qué implementa?
-
-| Capacidad | Cómo |
-|---|---|
-| Agente con *function calling* | Bucle en el backend Go: LLM → tool call → resultado → LLM → respuesta |
-| Herramientas expuestas por **MCP** | Servidor MCP independiente (Go, transporte SSE) con las tools del negocio |
-| Datos reales | PostgreSQL 16 (pedidos, productos, stock, tickets) |
-| Base para RAG | `pgvector` + embeddings (`text-embedding-3-small`) de documentos de la tienda |
-| Interfaz web | React + Vite + Tailwind con widget de chat flotante |
-| Despliegue local | Docker Compose (4 servicios) |
-
-### Tools del servidor MCP
-
-| Tool | Qué hace | Tipo |
-|---|---|---|
-| `get_order_status` | Consulta el estado de un pedido | Lectura |
-| `check_stock` | Disponibilidad de un producto en bodega | Lectura |
-| `search_products` | Búsqueda de productos por palabra clave y precio máximo | Lectura |
-| `create_support_ticket` | Crea un ticket de soporte técnico | **Escritura** |
+- Seguimiento de pedidos
+- Consulta de disponibilidad y precios
+- Búsqueda de productos en el catálogo
+- Creación de tickets de soporte técnico
 
 ## Arquitectura
 
 ```mermaid
 flowchart LR
-    U([Usuario]) --> F["Frontend<br/>React + Vite + Tailwind<br/>:5174"]
+    U([Cliente]) --> F["Frontend<br/>React + Vite + Tailwind<br/>:5174"]
     F -->|"POST /api/chat"| B["Backend API (Go + chi)<br/>Controller → Service<br/>:8080"]
     B -->|"chat completions<br/>+ tool calling"| O[("OpenAI<br/>gpt-4o-mini")]
     B -->|"MCP sobre SSE<br/>(JSON-RPC)"| M["Servidor MCP (Go)<br/>:5000"]
     M --> P[("PostgreSQL 16<br/>+ pgvector<br/>:5432")]
-    B -->|"embeddings de documentos<br/>al arrancar"| P
+    B -->|"ingesta de embeddings"| P
 ```
 
-### Flujo de una consulta (bucle del agente)
+### Flujo de una solicitud
 
 ```mermaid
 sequenceDiagram
-    participant U as Usuario
+    participant U as Cliente
     participant F as Frontend
     participant B as Backend (agente)
     participant L as OpenAI
@@ -62,46 +43,67 @@ sequenceDiagram
     U->>F: "¿Dónde está mi pedido 1234?"
     F->>B: POST /api/chat {message}
     B->>M: ListTools
-    M-->>B: definición de tools
-    B->>L: mensajes + tools
+    M-->>B: definición de herramientas
+    B->>L: mensajes + herramientas
     L-->>B: tool_call get_order_status(order_id)
     B->>M: CallTool
     M->>D: SELECT ... WHERE id = $1
-    D-->>M: fila
-    M-->>B: resultado
-    B->>L: resultado de la tool
-    L-->>B: respuesta final en lenguaje natural
+    D-->>M: resultado
+    M-->>B: resultado de la herramienta
+    B->>L: resultado de la herramienta
+    L-->>B: respuesta final
     B-->>F: {reply}
 ```
+
+## Componentes
+
+| Componente | Tecnología | Responsabilidad |
+|---|---|---|
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, Motion | Tienda web y widget de chat |
+| Backend API | Go, chi, go-openai, mcp-go | Endpoint de chat y orquestación del agente (cliente MCP) |
+| Servidor MCP | Go, mcp-go (transporte SSE) | Herramientas del negocio sobre JSON-RPC |
+| Base de datos | PostgreSQL 16, pgvector, pgx | Datos transaccionales y base de conocimiento vectorial |
+| Orquestación | Docker Compose | Entorno local de cuatro servicios |
+
+### Herramientas MCP
+
+| Herramienta | Descripción | Tipo |
+|---|---|---|
+| `get_order_status` | Estado actual de un pedido | Lectura |
+| `check_stock` | Disponibilidad de un producto en bodega | Lectura |
+| `search_products` | Búsqueda en el catálogo por palabra clave y precio máximo | Lectura |
+| `create_support_ticket` | Alta de un ticket de soporte técnico | Escritura |
 
 ## Estructura del repositorio
 
 ```
 .
-├── backend/        API REST en Go (controller → service → repository) y bucle del agente
-├── mcp-server/     Servidor MCP en Go con las tools del negocio
-├── frontend/       Tienda web + widget de chat (React, TypeScript, Tailwind)
-├── db/init.sql     Esquema y datos de ejemplo (incluye pgvector)
-├── docker-compose.yml
+├── backend/          API REST y orquestación del agente (controller → service → repository)
+├── mcp-server/       Servidor MCP y herramientas del negocio
+├── frontend/         Aplicación web (React + TypeScript)
+├── db/               Esquema y datos iniciales
+└── docker-compose.yml
 ```
 
 ## Puesta en marcha
 
-**Requisitos:** Docker + Docker Compose y una API key de OpenAI.
+**Requisitos:** Docker, Docker Compose y una API key de OpenAI.
 
-```bash
-# 1) Variables de entorno (archivo .env en la raíz, NO se versiona)
-OPENAI_API_KEY=sk-...
+Crear un archivo `.env` en la raíz del proyecto (no se versiona):
+
+```env
+OPENAI_API_KEY=<tu-api-key>
 DB_HOST=postgres
 DB_PORT=5432
-DB_USER=admin
-DB_PASSWORD=<tu-contraseña>
+DB_USER=<usuario>
+DB_PASSWORD=<contraseña>
 DB_NAME=tienda_rag
+```
 
-# 2) Levantar todo
+Levantar los servicios:
+
+```bash
 docker compose up --build
-
-# 3) Verificar que los 4 servicios estén arriba
 docker compose ps
 ```
 
@@ -112,48 +114,30 @@ docker compose ps
 | Servidor MCP | http://localhost:5000/sse |
 | PostgreSQL | localhost:5432 |
 
-Prueba rápida:
+Prueba rápida del endpoint:
 
 ```bash
 curl -s -X POST http://localhost:8080/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"message":"¿Tienen la Cámara SecureCam Pro?"}'
+  -d '{"message":"¿Tienen la Cámara SecureCam Pro en stock?"}'
 ```
 
-## Ramas
+## API
 
-| Rama | Propósito |
-|---|---|
-| `vulnerable` (tag `v0-vulnerable`) | **Línea base intencionalmente insegura**, conservada como el "antes" para comparar y aprender |
-| `hardening` | Mejoras: RAG conectado, arquitectura n-tier, autenticación y controles de seguridad |
+### `POST /api/chat`
 
-> ⚠️ **Aviso:** la rama `vulnerable` contiene fallos a propósito (sin autenticación, MCP expuesto, credenciales de ejemplo). **Es solo educativa: no la despliegues.**
+Solicitud:
 
-## Estado actual de la línea base
+```json
+{ "message": "¿Cuál es el estado del pedido 1234?" }
+```
 
-Lo que funciona: agente con tool calling, servidor MCP, consulta de pedidos/stock/productos, creación de tickets y UI de chat.
+Respuesta:
 
-Limitaciones conocidas (detalle en [`FINDINGS.md`](FINDINGS.md)):
-
-- **RAG incompleto:** los embeddings de `tienda_docs` se generan, pero ninguna tool los consulta todavía.
-- **Sin autenticación ni propiedad de datos:** cualquiera puede consultar cualquier pedido (control de acceso roto).
-- **Servidor MCP sin autenticación** y publicado en el host.
-- **Bucle del agente sin límite de iteraciones ni timeout;** sin memoria de conversación.
-- Sin *rate limiting*; CORS abierto.
-
-## Hoja de ruta
-
-1. **Base de datos y n-tier:** esquema realista (clientes, categorías, productos, inventario, pedidos, tickets), migraciones versionadas y capas `domain → repository → service → handler` compartidas por la API y el MCP.
-2. **RAG como tool del MCP:** `search_knowledge` con búsqueda por similitud (`pgvector`), umbral y *top-k*; textos recuperados tratados como datos no confiables.
-3. **Seguridad:** autenticación (JWT), `user_id` inyectado por el backend (nunca decidido por el LLM), MCP en red interna y autenticado, *rate limiting*, límites de entrada, CORS restringido.
-4. **Frontend realista:** catálogo desde la API, detalle de producto, carrito, login y chat con Markdown sanitizado.
-
-Cada práctica de seguridad aplicada se registra con trazabilidad (archivo y línea) en `SECURITY_LOG.txt`.
+```json
+{ "reply": "El pedido 1234 está en camino." }
+```
 
 ## Stack
 
-Go · chi · pgx · mark3labs/mcp-go · go-openai · PostgreSQL 16 + pgvector · React 19 · TypeScript · Vite · Tailwind CSS · Motion · Docker Compose
-
-## Licencia y uso
-
-Proyecto educativo (prueba de concepto). No es un producto listo para producción.
+Go · chi · pgx · mcp-go · go-openai · PostgreSQL 16 · pgvector · React 19 · TypeScript · Vite · Tailwind CSS · Motion · Docker Compose
